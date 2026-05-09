@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SeizureShield</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --surface2: #22263a;
+      --border: rgba(255,255,255,0.07);
+      --text: #e8eaf0;
+      --text-muted: #7c82a0;
+      --accent: #6c8fff;
+      --accent-dim: rgba(108,143,255,0.12);
+      --danger: #ff6b6b;
+      --danger-dim: rgba(255,107,107,0.12);
+      --success: #5cd9a5;
+    }
+
+    body {
+      width: 280px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 13px;
+      line-height: 1.5;
+      padding: 0;
+      overflow: hidden;
+    }
+
+    /* Header */
+    .header {
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: var(--surface);
+    }
+
+    .logo {
+      width: 28px;
+      height: 28px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(108,143,255,0.25);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .header-text h1 {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.01em;
+      color: var(--text);
+    }
+
+    .header-text p {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 1px;
+    }
+
+    /* Status bar */
+    .status-bar {
+      padding: 10px 18px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .status-dot-wrap {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+      transition: all 0.3s;
+    }
+
+    .status-dot.off {
+      background: var(--text-muted);
+      box-shadow: none;
+    }
+
+    /* Toggle switch */
+    .toggle-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .toggle {
+      position: relative;
+      width: 36px;
+      height: 20px;
+    }
+
+    .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+
+    .toggle-track {
+      position: absolute;
+      inset: 0;
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      transition: background 0.25s, border-color 0.25s;
+      cursor: pointer;
+    }
+
+    .toggle input:checked ~ .toggle-track {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .toggle-thumb {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 14px;
+      height: 14px;
+      background: #fff;
+      border-radius: 50%;
+      transition: transform 0.25s cubic-bezier(.4,0,.2,1);
+      pointer-events: none;
+    }
+
+    .toggle input:checked ~ .toggle-track .toggle-thumb {
+      transform: translateX(16px);
+    }
+
+    /* Body content */
+    .body {
+      padding: 14px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    /* Section label */
+    .section-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    /* Sensitivity pills */
+    .sensitivity-group {
+      display: flex;
+      gap: 6px;
+    }
+
+    .pill {
+      flex: 1;
+      padding: 7px 0;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 500;
+      border-radius: 7px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .pill:hover { border-color: rgba(255,255,255,0.15); color: var(--text); }
+
+    .pill.active {
+      background: var(--accent-dim);
+      border-color: rgba(108,143,255,0.35);
+      color: var(--accent);
+    }
+
+    /* Live readout */
+    .readout {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+
+    .readout-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 3px 0;
+    }
+
+    .readout-label { color: var(--text-muted); font-size: 12px; }
+
+    .readout-value {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--text);
+    }
+
+    .readout-value.danger { color: var(--danger); }
+    .readout-value.safe   { color: var(--success); }
+
+    /* Flash bar */
+    .flash-bar-wrap {
+      margin-top: 8px;
+      height: 4px;
+      background: var(--surface2);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .flash-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--success);
+      border-radius: 4px;
+      transition: width 0.2s, background 0.2s;
+    }
+
+    /* Footer */
+    .footer {
+      padding: 10px 18px;
+      border-top: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    .footer a { color: var(--accent); text-decoration: none; }
+    .footer a:hover { text-decoration: underline; }
+
+    /* Disabled state */
+    .body.disabled { opacity: 0.4; pointer-events: none; }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo">🛡</div>
+    <div class="header-text">
+      <h1>SeizureShield</h1>
+      <p>Photosensitive epilepsy protection</p>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-dot-wrap">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-text">Monitoring</span>
+    </div>
+    <label class="toggle-wrap">
+      <div class="toggle">
+        <input type="checkbox" id="enable-toggle" checked>
+        <div class="toggle-track">
+          <div class="toggle-thumb"></div>
+        </div>
+      </div>
+    </label>
+  </div>
+
+  <div class="body" id="body-content">
+
+    <div>
+      <div class="section-label">Sensitivity</div>
+      <div class="sensitivity-group">
+        <button class="pill" data-value="low">Low</button>
+        <button class="pill active" data-value="medium">Medium</button>
+        <button class="pill" data-value="high">High</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-label">Live readout</div>
+      <div class="readout">
+        <div class="readout-row">
+          <span class="readout-label">Flashes / sec</span>
+          <span class="readout-value" id="flash-count">—</span>
+        </div>
+        <div class="readout-row">
+          <span class="readout-label">Status</span>
+          <span class="readout-value safe" id="flash-status">Safe</span>
+        </div>
+        <div class="flash-bar-wrap">
+          <div class="flash-bar" id="flash-bar"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    Based on <a href="https://www.w3.org/WAI/WCAG21/Understanding/three-flashes-or-below-threshold.html" target="_blank">WCAG 2.1</a> flash thresholds
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
