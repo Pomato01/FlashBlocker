@@ -4,14 +4,9 @@
   "version": "1.0.0",
   "description": "Automatically detects and dims seizure-triggering flashing content on YouTube.",
 
-  "permissions": [
-    "storage",
-    "activeTab"
-  ],
+  "permissions": ["storage", "activeTab"],
 
-  "host_permissions": [
-    "https://www.youtube.com/*"
-  ],
+  "host_permissions": ["https://www.youtube.com/*"],
 
   "content_scripts": [
     {
@@ -25,14 +20,13 @@
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
+      "32": "icons/icon32.png"
     }
   },
 
   "icons": {
     "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
+    "32": "icons/icon32.png",
+    "192": "icons/icon192.png"
   }
 }
