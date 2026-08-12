@@ -1,32 +1,26 @@
 {
   "manifest_version": 3,
-  "name": "SeizureShield for YouTube",
+  "name": "SeizureShield - YouTube Flash Blocker",
   "version": "1.0.0",
-  "description": "Automatically detects and dims seizure-triggering flashing content on YouTube.",
-
-  "permissions": ["storage", "activeTab"],
-
-  "host_permissions": ["https://www.youtube.com/*"],
-
+  "description": "Protects users from photosensitive seizure risks by detecting and dimming flashing content on YouTube in real time.",
+  "permissions": ["storage"],
+  "host_permissions": ["*://*.youtube.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
-      "matches": ["https://www.youtube.com/*"],
+      "matches": ["*://*.youtube.com/*"],
       "js": ["content_script.js"],
       "run_at": "document_idle"
     }
   ],
-
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
-      "32": "icons/icon32.png"
+      "32": "icons/icon32.png",
+      "192": "icons/icon192.png"
     }
-  },
-
-  "icons": {
-    "16": "icons/icon16.png",
-    "32": "icons/icon32.png",
-    "192": "icons/icon192.png"
   }
 }

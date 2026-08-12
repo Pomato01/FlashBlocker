@@ -1,208 +1,143 @@
-/**
- * content_script.js
- *
- * Chrome injects this file into every YouTube page. It has direct access
- * to the page's DOM — meaning it can find the <video> element, draw frames
- * to a canvas, and inject an overlay div over the video.
- *
- * This is the coordinator: it drives the frame capture loop, feeds data
- * to the Worker, and acts on what the Worker reports back.
- */
+let settings = { enabled: true, sensitivity: "medium" };
 
-// --- Configuration (synced from user settings in popup) ---
-let settings = {
-  enabled: true,
-  sensitivity: 'medium'  // 'low' | 'medium' | 'high'
-};
-
-// --- DOM references we need ---
 let videoElement = null;
+let playerContainer = null;
 let overlayElement = null;
-let canvas = null;
-let ctx = null;
-let worker = null;
 let animationFrameId = null;
 let overlayActive = false;
 let overlayTimeout = null;
 
-// How many ms to keep the overlay on screen after danger is detected.
-// We keep it on briefly so fast flashes don't cause rapid flicker of the overlay itself.
-const OVERLAY_HOLD_MS = 800;
+let offscreenCanvas = null;
+let offscreenCtx = null;
 
-// How often to analyze a frame (ms). 33ms ≈ 30fps.
-// We don't need to analyze every single rendered frame — 30fps is plenty
-// to catch flashes that happen at 3+ Hz.
-const ANALYSIS_INTERVAL_MS = 33;
+const OVERLAY_HOLD_MS = 1000;
+const ANALYSIS_INTERVAL_MS = 33; // ~30 FPS
 let lastAnalysisTime = 0;
+let suppressUntil = 0;
 
-// -------------------------------------------------------------------
-// Initialization
-// -------------------------------------------------------------------
+let lastFlashesPerSecond = 0;
+let lastIsDangerous = false;
 
-/**
- * Load saved settings from Chrome's storage, then start watching for
- * a video element to appear. YouTube is a single-page app so the video
- * element may not exist yet when this script first runs.
- */
 function init() {
-  chrome.storage.sync.get({ enabled: true, sensitivity: 'medium' }, (stored) => {
-    settings = stored;
-    watchForVideo();
+  chrome.storage.sync.get(
+    { enabled: true, sensitivity: "medium" },
+    (stored) => {
+      settings = stored;
+      watchForVideo();
+    },
+  );
+
+  chrome.storage.onChanged.addListener((changes) => {
+    if (changes.enabled) settings.enabled = changes.enabled.newValue;
+    if (changes.sensitivity)
+      settings.sensitivity = changes.sensitivity.newValue;
+
+    if (!settings.enabled) {
+      deactivateOverlay();
+      stopLoop();
+    } else {
+      startLoop();
+    }
   });
 }
 
-/**
- * YouTube dynamically inserts and removes <video> elements as the user
- * navigates between pages (it's a React SPA). We use a MutationObserver
- * to detect when a video appears, rather than assuming it's already there.
- */
 function watchForVideo() {
-  // Check if there's already a video on the page
-  const existing = document.querySelector('video');
-  if (existing) {
-    attachToVideo(existing);
-    return;
-  }
-
-  // Otherwise watch for one to be added to the DOM
-  const observer = new MutationObserver(() => {
-    const video = document.querySelector('video');
-    if (video) {
-      observer.disconnect();
+  const checkVideo = () => {
+    const video = document.querySelector("video.html5-main-video");
+    if (video && video !== videoElement) {
       attachToVideo(video);
     }
-  });
+  };
 
+  checkVideo();
+  const observer = new MutationObserver(checkVideo);
   observer.observe(document.body, { childList: true, subtree: true });
 }
 
-// -------------------------------------------------------------------
-// Attaching to the video element
-// -------------------------------------------------------------------
-
-/**
- * Once we have a video element, set up everything we need:
- * - A hidden canvas to capture frames
- * - An overlay div to dim dangerous content
- * - A Web Worker to run the analysis
- * - The animation frame loop
- */
 function attachToVideo(video) {
   videoElement = video;
+  playerContainer = video.closest(".html5-video-player") || video.parentElement;
 
-  // Create a hidden canvas the same size as the video.
-  // We never display this canvas — it's just a scratchpad for pixel reading.
-  canvas = document.createElement('canvas');
-  canvas.width = 320;   // We down-sample to 320x180 — sufficient for brightness
-  canvas.height = 180;  // analysis and much faster than native 1080p resolution
-  canvas.style.display = 'none';
-  document.body.appendChild(canvas);
-  ctx = canvas.getContext('2d', { willReadFrequently: true });
-  // willReadFrequently: true is a Chrome hint that tells the browser we'll be
-  // calling getImageData() a lot — it optimizes internally for this access pattern.
+  if (playerContainer) {
+    playerContainer.style.position = "relative";
+  }
 
-  // Create the overlay div that sits over the video during dangerous content
   createOverlay();
-
-  // Start the Web Worker
-  worker = new Worker(chrome.runtime.getURL('analyzer.worker.js'));
-  worker.onmessage = handleWorkerResult;
-
-  // Begin the frame capture loop
   startLoop();
 
-  // Listen for messages sent from popup.js
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message.type === 'SETTINGS_UPDATE') {
-      settings = message.settings;
-      if (!settings.enabled) {
-        deactivateOverlay();
-        stopLoop();
-      } else {
-        startLoop();
-      }
+    if (message.type === "GET_STATS") {
+      sendResponse({
+        flashesPerSecond: lastFlashesPerSecond,
+        isDangerous: lastIsDangerous,
+        enabled: settings.enabled,
+      });
     }
-
-    // Popup polls this every 300ms to show the live flash readout
-    if (message.type === 'GET_STATS') {
-      sendResponse({ flashesPerSecond: lastFlashesPerSecond, isDangerous: lastIsDangerous });
-    }
-
-    return true; // Keep the message channel open for async sendResponse
+    return true;
   });
 
-  // If the user navigates to a new YouTube video (SPA navigation),
-  // re-attach to the new video element
-  video.addEventListener('emptied', () => {
-    deactivateOverlay();
-    watchForVideo();
-  });
+  video.addEventListener("emptied", () => deactivateOverlay());
 }
 
-// -------------------------------------------------------------------
-// Overlay
-// -------------------------------------------------------------------
-
-/**
- * Creates a full-screen overlay div positioned over the video element.
- * It starts hidden (opacity 0) and fades in when danger is detected.
- */
 function createOverlay() {
-  overlayElement = document.createElement('div');
-  overlayElement.id = 'seizure-shield-overlay';
+  if (overlayElement) overlayElement.remove();
 
-  // Position it on top of the video's parent container
-  const videoContainer = videoElement.closest('.html5-video-container') || videoElement.parentElement;
-  videoContainer.style.position = 'relative';
-  videoContainer.appendChild(overlayElement);
+  overlayElement = document.createElement("div");
+  overlayElement.id = "seizure-shield-overlay";
 
   Object.assign(overlayElement.style, {
-    position: 'absolute',
-    top: '0',
-    left: '0',
-    width: '100%',
-    height: '100%',
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    zIndex: '9999',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    opacity: '0',
-    transition: 'opacity 0.15s ease',
-    pointerEvents: 'none',   // Lets clicks pass through when inactive
-    fontFamily: 'sans-serif',
-    color: '#ffffff',
-    textAlign: 'center',
-    gap: '12px'
+    position: "absolute",
+    top: "0",
+    left: "0",
+    width: "100%",
+    height: "100%",
+    backgroundColor: "rgba(0, 0, 0, 0.92)",
+    zIndex: "9999",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    opacity: "0",
+    transition: "opacity 0.15s ease",
+    pointerEvents: "none",
+    fontFamily: "Roboto, Arial, sans-serif",
+    color: "#ffffff",
+    textAlign: "center",
+    boxSizing: "border-box",
+    padding: "20px",
   });
 
-  // Warning message shown inside the overlay
   overlayElement.innerHTML = `
-    <div style="font-size: 22px; font-weight: 600;">⚠ Flashing content detected</div>
-    <div style="font-size: 14px; opacity: 0.75;">Video dimmed by SeizureShield</div>
-    <button id="seizure-shield-dismiss"
-      style="margin-top:8px; padding: 8px 20px; border-radius: 6px;
-             background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
-             color: #fff; cursor: pointer; font-size: 13px;">
-      Resume anyway
+    <div style="background: rgba(255, 68, 68, 0.2); border: 1px solid rgba(255, 68, 68, 0.5); padding: 8px 16px; border-radius: 20px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: #ff6b6b; font-weight: 700; margin-bottom: 12px;">
+      Safety Warning
+    </div>
+    <div style="font-size: 20px; font-weight: 600; margin-bottom: 6px;">Flashing Content Suppressed</div>
+    <div style="font-size: 13px; opacity: 0.8; max-width: 360px; line-height: 1.4; margin-bottom: 16px;">
+      Rapid light or brightness changes detected. Video dimmed to reduce seizure risk.
+    </div>
+    <button id="seizure-shield-dismiss" style="padding: 10px 24px; border-radius: 18px; background: #ffffff; border: none; color: #000000; font-weight: 600; cursor: pointer; font-size: 13px;">
+      Resume Video
     </button>
   `;
 
-  // Allow user to manually dismiss the overlay
-  document.getElementById('seizure-shield-dismiss').addEventListener('click', (e) => {
-    e.stopPropagation();
-    manualDismiss();
-  });
+  if (playerContainer) {
+    playerContainer.appendChild(overlayElement);
+  }
+
+  overlayElement
+    .querySelector("#seizure-shield-dismiss")
+    .addEventListener("click", (e) => {
+      e.stopPropagation();
+      manualDismiss();
+    });
 }
 
 function activateOverlay() {
   if (overlayActive) return;
   overlayActive = true;
-  overlayElement.style.opacity = '1';
-  overlayElement.style.pointerEvents = 'auto';
+  overlayElement.style.opacity = "1";
+  overlayElement.style.pointerEvents = "auto";
 
-  // Pause the video to give the user time to react
   if (videoElement && !videoElement.paused) {
     videoElement.pause();
   }
@@ -211,28 +146,21 @@ function activateOverlay() {
 function deactivateOverlay() {
   overlayActive = false;
   if (overlayElement) {
-    overlayElement.style.opacity = '0';
-    overlayElement.style.pointerEvents = 'none';
+    overlayElement.style.opacity = "0";
+    overlayElement.style.pointerEvents = "none";
   }
 }
 
 function manualDismiss() {
   deactivateOverlay();
-  // Give a 3-second grace period where we suppress re-triggering,
-  // so the user can actually watch the video they just unpaused.
-  suppressUntil = Date.now() + 3000;
+  suppressUntil = Date.now() + 4000;
+  if (videoElement && videoElement.paused) {
+    videoElement.play();
+  }
 }
 
-let suppressUntil = 0;
-let lastFlashesPerSecond = 0;
-let lastIsDangerous = false;
-
-// -------------------------------------------------------------------
-// Frame capture loop
-// -------------------------------------------------------------------
-
 function startLoop() {
-  if (animationFrameId) return; // Already running
+  if (animationFrameId) return;
   loop();
 }
 
@@ -243,65 +171,99 @@ function stopLoop() {
   }
 }
 
-/**
- * The main loop. Runs on requestAnimationFrame — meaning it fires in sync
- * with the browser's render cycle (up to ~60fps). We throttle our actual
- * analysis to every ANALYSIS_INTERVAL_MS (33ms = ~30fps) so we don't
- * over-analyze.
- */
-function loop(timestamp = 0) {
+async function loop(timestamp = 0) {
   animationFrameId = requestAnimationFrame(loop);
 
-  if (!settings.enabled) return;
-  if (!videoElement || videoElement.paused || videoElement.ended) return;
+  if (
+    !settings.enabled ||
+    !videoElement ||
+    videoElement.paused ||
+    videoElement.ended
+  )
+    return;
   if (timestamp - lastAnalysisTime < ANALYSIS_INTERVAL_MS) return;
   lastAnalysisTime = timestamp;
 
-  // Draw the current video frame onto our small canvas
   try {
-    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    const width = 80; // 80x45 resolution is lightweight and accurate for flash detection
+    const height = 45;
+
+    if (!offscreenCanvas) {
+      offscreenCanvas = document.createElement("canvas");
+      offscreenCanvas.width = width;
+      offscreenCanvas.height = height;
+      offscreenCtx = offscreenCanvas.getContext("2d", {
+        willReadFrequently: true,
+      });
+    }
+
+    offscreenCtx.drawImage(videoElement, 0, 0, width, height);
+    const imageData = offscreenCtx.getImageData(0, 0, width, height);
+
+    // Compute frame stats locally (instantaneous, lightweight math)
+    const frameStats = computeFrameStats(imageData.data, width, height);
+
+    // Send a tiny 16-byte payload to the background script
+    chrome.runtime.sendMessage(
+      {
+        type: "ANALYZE_FRAME",
+        frameStats,
+        timestamp,
+      },
+      (response) => {
+        if (chrome.runtime.lastError || !response) return;
+        handleAnalysisResult(response);
+      },
+    );
   } catch (e) {
-    // Cross-origin errors can happen with some YouTube embeds — skip this frame
-    return;
+    // Cross-origin element protection skip
   }
-
-  // Read all pixel data from the canvas
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-
-  // Send the raw pixel data to the Worker.
-  // We transfer the underlying ArrayBuffer rather than copying it (the {transfer} option)
-  // — this is significantly faster for large arrays.
-  worker.postMessage(
-    { pixels: imageData.data, width: canvas.width, height: canvas.height, timestamp },
-    [imageData.data.buffer]
-  );
 }
 
-// -------------------------------------------------------------------
-// Handling worker results
-// -------------------------------------------------------------------
-
 /**
- * The Worker sends back { isDangerous, flashesPerSecond, luminance }
- * every time it finishes analyzing a frame.
+ * Calculates average WCAG relative luminance & RGB on a tiny frame sample.
  */
-function handleWorkerResult({ data }) {
-  const { isDangerous, flashesPerSecond } = data;
+function computeFrameStats(pixels, width, height) {
+  const halfWidth = Math.floor(width / 2);
+  const halfHeight = Math.floor(height / 2);
+
+  // Luminance sums and pixel counts for 4 quadrants: [TL, TR, BL, BR]
+  const regionLuminance = [0, 0, 0, 0];
+  const regionCounts = [0, 0, 0, 0];
+
+  for (let y = 0; y < height; y += 2) {
+    for (let x = 0; x < width; x += 2) {
+      const idx = (y * width + x) * 4;
+
+      // Determine quadrant (0 = Top-Left, 1 = Top-Right, 2 = Bottom-Left, 3 = Bottom-Right)
+      const quadrant = (y < halfHeight ? 0 : 2) + (x < halfWidth ? 0 : 1);
+
+      const r = pixels[idx] / 255;
+      const g = pixels[idx + 1] / 255;
+      const b = pixels[idx + 2] / 255;
+
+      const R = r <= 0.04045 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4);
+      const G = g <= 0.04045 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4);
+      const B = b <= 0.04045 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4);
+
+      regionLuminance[quadrant] += 0.2126 * R + 0.7152 * G + 0.0722 * B;
+      regionCounts[quadrant]++;
+    }
+  }
+
+  // Return an array of 4 region luminance values
+  return regionLuminance.map((sum, i) => sum / (regionCounts[i] || 1));
+}
+function handleAnalysisResult(result) {
+  const { isDangerous, flashesPerSecond } = result;
 
   lastFlashesPerSecond = flashesPerSecond;
   lastIsDangerous = isDangerous;
 
   if (isDangerous && Date.now() > suppressUntil) {
     activateOverlay();
-
-    // Clear any existing auto-dismiss timer and set a new one
     if (overlayTimeout) clearTimeout(overlayTimeout);
-    overlayTimeout = setTimeout(() => {
-      // Only auto-dismiss if the flashing has stopped
-      // (isDangerous will be false if the worker calms down)
-    }, OVERLAY_HOLD_MS);
   } else if (!isDangerous && overlayActive) {
-    // Flashing has calmed down — schedule overlay dismissal
     if (!overlayTimeout) {
       overlayTimeout = setTimeout(() => {
         deactivateOverlay();
@@ -311,7 +273,4 @@ function handleWorkerResult({ data }) {
   }
 }
 
-// -------------------------------------------------------------------
-// Kick everything off
-// -------------------------------------------------------------------
 init();

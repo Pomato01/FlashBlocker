@@ -1,86 +1,116 @@
 /**
  * analyzer.worker.js
- *
- * Runs in a Web Worker — completely separate from the main browser thread.
- * Receives raw pixel data from the content script, runs the flash detection
- * algorithm, and posts back a result. Because this is in a Worker, heavy
- * pixel math never freezes or slows down the YouTube page itself.
+ * Worker logic using OffscreenCanvas and WCAG 2.1 Relative Luminance calculation.
  */
 
-// --- State the worker keeps between frames ---
-let previousLuminance = null;   // Average brightness of the last frame
-let flashTimestamps = [];       // When each "flash" occurred (ms timestamps)
-const FLASH_WINDOW_MS = 1000;   // How far back we look (1 second)
-const FLASH_THRESHOLD = 3;      // How many flashes per second = danger (WCAG)
-const LUMINANCE_DELTA = 0.10;   // Min brightness change to count as a flash
-                                // (0–1 scale; 0.10 ≈ 10% brightness swing)
+let offscreenCanvas = null;
+let offscreenCtx = null;
 
-/**
- * Listen for pixel data messages sent by content_script.js.
- * Each message looks like: { pixels: Uint8ClampedArray, width, height, timestamp }
- */
-self.onmessage = function(event) {
-  const { pixels, width, height, timestamp } = event.data;
+let previousLuminance = null;
+let flashTimestamps = [];
 
-  // Step 1: Calculate average luminance of this frame.
-  // We sample every 4th pixel row and column (16x fewer pixels) for performance.
-  const luminance = sampleLuminance(pixels, width, height);
+let config = {
+  flashWindowMs: 1000,
+  flashThreshold: 3, // WCAG 2.1 general flash threshold
+  luminanceDelta: 0.1,
+};
 
-  // Step 2: Compare to the previous frame.
+self.onmessage = function (event) {
+  const { type, settings, bitmap, timestamp } = event.data;
+
+  if (type === "UPDATE_SETTINGS" && settings) {
+    applySensitivity(settings.sensitivity);
+    return;
+  }
+
+  if (type === "ANALYZE_FRAME" && bitmap) {
+    analyzeFrame(bitmap, timestamp);
+  }
+};
+
+function applySensitivity(sensitivity) {
+  switch (sensitivity) {
+    case "high":
+      config.luminanceDelta = 0.06;
+      config.flashThreshold = 2;
+      break;
+    case "low":
+      config.luminanceDelta = 0.15;
+      config.flashThreshold = 4;
+      break;
+    case "medium":
+    default:
+      config.luminanceDelta = 0.1;
+      config.flashThreshold = 3;
+      break;
+  }
+}
+
+function analyzeFrame(bitmap, timestamp) {
+  const width = bitmap.width;
+  const height = bitmap.height;
+
+  if (!offscreenCanvas) {
+    offscreenCanvas = new OffscreenCanvas(width, height);
+    offscreenCtx = offscreenCanvas.getContext("2d", {
+      willReadFrequently: true,
+    });
+  }
+
+  offscreenCtx.drawImage(bitmap, 0, 0);
+  bitmap.close(); // Free bitmap memory immediately
+
+  const imageData = offscreenCtx.getImageData(0, 0, width, height);
+  const luminance = calculateRelativeLuminance(imageData.data, width, height);
+
   if (previousLuminance !== null) {
     const delta = Math.abs(luminance - previousLuminance);
-
-    // A "flash" is a brightness swing large enough to be a real flash,
-    // not just a scene cut or gradual change.
-    if (delta > LUMINANCE_DELTA) {
+    if (delta >= config.luminanceDelta) {
       flashTimestamps.push(timestamp);
     }
   }
 
   previousLuminance = luminance;
+  flashTimestamps = flashTimestamps.filter(
+    (t) => timestamp - t < config.flashWindowMs,
+  );
 
-  // Step 3: Remove timestamps older than 1 second.
-  flashTimestamps = flashTimestamps.filter(t => timestamp - t < FLASH_WINDOW_MS);
-
-  // Step 4: Count flashes in the last second and report back.
   const flashesPerSecond = flashTimestamps.length;
-  const isDangerous = flashesPerSecond >= FLASH_THRESHOLD;
+  const isDangerous = flashesPerSecond >= config.flashThreshold;
 
   self.postMessage({
     isDangerous,
     flashesPerSecond,
-    luminance
+    luminance,
   });
-};
+}
 
 /**
- * Calculates the average perceived brightness of a frame.
- * Uses the standard luminance formula (ITU-R BT.709) which weights
- * green more heavily because human eyes are more sensitive to green.
- *
- * @param {Uint8ClampedArray} pixels - Raw RGBA pixel data from canvas
- * @param {number} width  - Frame width in pixels
- * @param {number} height - Frame height in pixels
- * @returns {number} Luminance value between 0 (black) and 1 (white)
+ * Calculates WCAG 2.1 Relative Luminance (sRGB -> Linear conversion)
  */
-function sampleLuminance(pixels, width, height) {
-  let total = 0;
-  let count = 0;
+function calculateRelativeLuminance(pixels, width, height) {
+  let totalLuminance = 0;
+  let sampleCount = 0;
 
-  // Step every 4 rows and 4 columns to sample ~6% of pixels.
-  // Fast enough for 30fps analysis; accurate enough to catch real flashes.
-  for (let y = 0; y < height; y += 4) {
-    for (let x = 0; x < width; x += 4) {
-      const index = (y * width + x) * 4; // Each pixel is 4 bytes: R, G, B, A
-      const r = pixels[index]     / 255;
-      const g = pixels[index + 1] / 255;
-      const b = pixels[index + 2] / 255;
+  // Subsample every 2nd pixel row and column
+  for (let y = 0; y < height; y += 2) {
+    for (let x = 0; x < width; x += 2) {
+      const idx = (y * width + x) * 4;
 
-      // ITU-R BT.709 weighted luminance
-      total += 0.2126 * r + 0.7152 * g + 0.0722 * b;
-      count++;
+      const r = pixels[idx] / 255;
+      const g = pixels[idx + 1] / 255;
+      const b = pixels[idx + 2] / 255;
+
+      // Linearize sRGB channel components
+      const R = r <= 0.04045 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4);
+      const G = g <= 0.04045 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4);
+      const B = b <= 0.04045 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4);
+
+      // ITU-R BT.709 linear weights
+      totalLuminance += 0.2126 * R + 0.7152 * G + 0.0722 * B;
+      sampleCount++;
     }
   }
 
-  return count > 0 ? total / count : 0;
+  return sampleCount > 0 ? totalLuminance / sampleCount : 0;
 }
