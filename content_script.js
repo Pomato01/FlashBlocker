@@ -83,7 +83,7 @@ function createOverlay() {
   if (overlayElement) overlayElement.remove();
 
   overlayElement = document.createElement("div");
-  overlayElement.id = "seizure-shield-overlay";
+  overlayElement.id = "flash-shield-overlay";
 
   Object.assign(overlayElement.style, {
     position: "absolute",
@@ -113,9 +113,9 @@ function createOverlay() {
     </div>
     <div style="font-size: 20px; font-weight: 600; margin-bottom: 6px;">Flashing Content Suppressed</div>
     <div style="font-size: 13px; opacity: 0.8; max-width: 360px; line-height: 1.4; margin-bottom: 16px;">
-      Rapid light or brightness changes detected. Video dimmed to reduce seizure risk.
+      Video dimmed due to rapid light or brightness changes.
     </div>
-    <button id="seizure-shield-dismiss" style="padding: 10px 24px; border-radius: 18px; background: #ffffff; border: none; color: #000000; font-weight: 600; cursor: pointer; font-size: 13px;">
+    <button id="flash-shield-dismiss" style="padding: 10px 24px; border-radius: 18px; background: #ffffff; border: none; color: #000000; font-weight: 600; cursor: pointer; font-size: 13px;">
       Resume Video
     </button>
   `;
@@ -125,7 +125,7 @@ function createOverlay() {
   }
 
   overlayElement
-    .querySelector("#seizure-shield-dismiss")
+    .querySelector("#flash-shield-dismiss")
     .addEventListener("click", (e) => {
       e.stopPropagation();
       manualDismiss();
