@@ -1,6 +1,6 @@
-# SeizureShield for YouTube
+# FlashShield for YouTube
 
-A Chrome extension that automatically detects and dims seizure-triggering flashing content on YouTube, built for people with photosensitive epilepsy.
+A Chrome extension that automatically detects and dims flashing content on YouTube, built for photosensitive people.
 
 Detection is based on the [WCAG 2.1 Three Flashes or Below Threshold](https://www.w3.org/WAI/WCAG21/Understanding/three-flashes-or-below-threshold.html) standard.
 
@@ -9,15 +9,15 @@ Detection is based on the [WCAG 2.1 Three Flashes or Below Threshold](https://ww
 ## File structure
 
 ```
-seizure-blocker/
+flash-blocker/
 ├── manifest.json          # Extension config (permissions, entry points)
 ├── content_script.js      # Runs inside YouTube — captures frames, drives overlay
 ├── analyzer.worker.js     # Web Worker — runs flash detection off the main thread
 ├── popup.html             # Settings popup UI
 ├── popup.js               # Settings popup logic
 ├── icons/
-│   ├── icon16.png
-│   ├── icon48.png
+│   ├── FlashBlockerIcon-2.png
+│   ├── FlashBlockerIcon-1.png
 │   └── icon128.png
 └── README.md
 ```
@@ -43,27 +43,44 @@ content_script.js  ──── postMessage(pixel data) ──▶  analyzer.work
 ```
 
 ### `manifest.json`
+
 Tells Chrome what the extension is allowed to do. Grants permission to access YouTube pages and Chrome storage. Declares which JS files run where.
 
 ### `content_script.js`
+
 The coordinator. Chrome injects it into every YouTube tab. It:
+
 - Waits for a `<video>` element to appear (YouTube is an SPA so this isn't instant)
 - Sets up a hidden canvas to capture video frames
+- Calculates WCAG relative luminance across a $2 \times 2$ spatial grid to detect localized flashes without dropping frames
 - Runs a `requestAnimationFrame` loop, drawing each frame to the canvas and reading pixel data
-- Sends that pixel data to the Worker
-- Receives danger signals back from the Worker and activates/deactivates the overlay
+- Sends lightweight quadrant luminance stats to background.js via runtime messaging
+- Receives signals back from the background.js and activates/deactivates the overlay
 - Listens for settings messages from the popup
 
 ### `analyzer.worker.js`
+
 Runs in a separate thread so heavy pixel math doesn't freeze the page. It:
+
 - Receives raw pixel data from the content script
 - Calculates average luminance using the ITU-R BT.709 formula
 - Tracks brightness changes over time
 - Counts flashes within a rolling 1-second window
 - Returns `isDangerous: true` when ≥3 flashes/sec are detected
 
+### `background.js`
+
+The analysis engine and state manager. Running as a service worker, it:
+
+- Recieves spatial frame metrics asynchronously off the main thread to eliminate frame drops and page lag
+- Evaluates frame-to-frame luminance deltas across each quadrant to prevent spatial cancellation errors
+- maintains 1 second rolling timestamp window to track flash frequencies
+- listens to chrome.storage.sync and syncs setting changes across extension components
+
 ### `popup.html` + `popup.js`
+
 The settings UI that appears when you click the extension icon. It:
+
 - Loads/saves settings via `chrome.storage.sync` (persists across sessions)
 - Broadcasts setting changes to the active tab's content script immediately
 - Polls the content script every 300ms to show a live flash-rate readout
@@ -75,7 +92,7 @@ The settings UI that appears when you click the extension icon. It:
 1. Open Chrome and go to `chrome://extensions`
 2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
-4. Select the `seizure-blocker/` folder
+4. Select the `flash-blocker/` folder
 
 You'll need to add placeholder icon images in `icons/` before Chrome will load the extension (any 16×16, 48×48, and 128×128 PNG files work for development).
 
