@@ -26,6 +26,7 @@ flash-blocker/
 
 ## How the files interact
 
+```
 popup.html / popup.js
 │
 │ chrome.storage (read/write sensitivity settings)
@@ -39,6 +40,7 @@ content_script.js ─── chrome.runtime.sendMessage(ANALYZE_FRAME) ──▶ 
 │
 ▼
 overlay div (injected into YouTube page)
+```
 
 ### `manifest.json`
 
