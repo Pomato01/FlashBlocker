@@ -18,9 +18,9 @@
   "action": {
     "default_popup": "popup.html",
     "default_icon": {
-      "16": "icons/FlashBlockerIcon-2.png",
-      "32": "icons/FlashBlockerIcon-1.png",
-      "192": "icons/FlashBlockerIcon.png"
+      "16": "icons/FlashBlockerIconPadded-2.png",
+      "32": "icons/FlashBlockerIconPadded-1.png",
+      "192": "icons/FlashBlockerIconPadded.png"
     }
   }
 }

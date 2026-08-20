@@ -16,9 +16,9 @@ flash-blocker/
 ├── popup.html             # Settings popup UI
 ├── popup.js               # Settings popup logic
 ├── icons/
-│   ├── FlashBlockerIcon-2.png
-│   ├── FlashBlockerIcon-1.png
-│   └── FlashBlockerIcon.png
+│   ├── FlashBlockerIconPadded-2.png
+│   ├── FlashBlockerIconPadded-1.png
+│   └── FlashBlockerIconPadded.png
 └── README.md
 ```
 
